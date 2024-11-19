@@ -1,162 +1,107 @@
-# Importações padrão
+# Standard
 import os
 import json
 
-# Bibliotecas
+# Third Party
 from dotenv import load_dotenv
-from pymongo import MongoClient
+from cassandra.cluster import Cluster, ResultSet
+from cassandra.auth import PlainTextAuthProvider
 
-# Carregar variáveis de ambiente
 load_dotenv()
 
-conexao_mongo = MongoClient(os.environ['MONGODB_URL'])
-banco_mongo = conexao_mongo.sqlparadocs
+cloud_config= {
+  'secure_connect_bundle': os.getenv('ASTRA_SECURE_BUNDLE')
+}
+auth_provider = PlainTextAuthProvider(os.getenv('CLIENT_ID'), os.getenv('CLIENT_SECRET'))
+cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider)
+session = cluster.connect()
 
-# Função para buscar o histórico acadêmico do aluno com RA fornecido
-def buscar_historico_aluno():
-    print("Recuperando histórico do aluno com RA: 241220555")
+def query_student_academic_record():
+    print("Buscando o histórico escolar do aluno de RA 241220555")
+    session.set_keyspace("faculdade")
+    relacao_estudante: ResultSet = session.execute("SELECT * FROM takes WHERE student_id = '241220555';")
 
-    consulta_pipeline = [
-        {"$match": {"student_id": "241220555"}}, 
-        {"$lookup": {
-            "from": "subj",         
-            "localField": "subj_id",
-            "foreignField": "id", 
-            "as": "detalhes_disciplina"  
-        }},
-        {"$unwind": "$detalhes_disciplina"}, 
-        {"$project": {
-            "student_id": 1,
-            "subj_id": 1,
-            "detalhes_disciplina.title": 1, 
-            "semester": 1, 
-            "year": 1,
-            "grade": 1,
-            "sala_disciplina": 1
-        }}
-    ]
+    resultado = []
 
-    resultado = list(banco_mongo["takes"].aggregate(consulta_pipeline))
+    for r in relacao_estudante:
+        subj: ResultSet = session.execute(f"SELECT * FROM subj WHERE id = '{r.subj_id}'")
+        resultado.append({ 
+            "subj_id": r.subj_id,
+            "title": subj[0].title,
+            "grade": float(r.grade),
+            "semester": r.semester,
+            "year": r.year
+        })
 
-    for i, linha in enumerate(resultado):
-        resultado[i]["_id"] = str(linha["_id"])
-        resultado[i]["codigo_disciplina"] = linha["detalhes_disciplina"]["title"]
-        resultado[i].pop("detalhes_disciplina")
+    with open('./resultados_cassandra/historico-escolar.json', 'w') as f:
+        json.dump({ "student_id": "241220555", "historico": resultado }, f, ensure_ascii=False)
 
-    with open('./resultados/historico-escolar.json', 'w') as f:
-        json.dump(resultado, f, ensure_ascii=False)
-
-# Retorna o histórico de disciplinas ministradas pelo professor com o ID selecionado
 def disciplinas_professor():
-    print("Buscando as disciplinas ministradas pelo professor de ID P010")
+    print("Buscando o histórico de disciplinas ministradas pelo professor de ID P010")
+    session.set_keyspace("faculdade")
+    relacao_professor: ResultSet = session.execute("SELECT * FROM teaches WHERE professor_id = 'P010';")
 
-    pipeline = [
-        {"$match": {"professor_id": "P010"}}, 
-    ]
+    resultado = []
 
-    resultado = list(banco_mongo["teaches"].aggregate(pipeline))
+    for r in relacao_professor:
+        subj: ResultSet = session.execute(f"SELECT * FROM subj WHERE id = '{r.subj_id}'")
+        resultado.append({ 
+            "subj_id": r.subj_id,
+            "title": subj[0].title,
+            "semester": r.semester,
+            "year": r.year
+        })
 
-    for i, linha in enumerate(resultado):
-        resultado[i]["_id"] = str(linha["_id"])
+    with open('./resultados_cassandra/disc-professor.json', 'w') as f:
+        json.dump({ "professor_id": "P010", "leciona": resultado }, f, ensure_ascii=False)
 
-    with open('./resultados/disc-professores.json', 'w') as f:
-        json.dump(resultado, f, ensure_ascii=False)
-
-# Retorna os alunos que se formaram no segundo semestre de 2018
 def alunos_formados():
-    print("Buscando alunos formados no segundo semestre de 2018")
+    print("Buscando os alunos que se formaram no segundo semestre de 2018")
+    session.set_keyspace("faculdade")
+    relacao_formando: ResultSet = session.execute("SELECT * FROM graduate WHERE year = 2018 AND semester = 2 ALLOW FILTERING;")
 
-    pipeline = [
-        {"$match": {"$and": [{"semester": 2}, {"year": 2018}]}}, 
-    ]
+    resultado = []
 
-    resultado = list(banco_mongo["graduate"].aggregate(pipeline))
+    for r in relacao_formando:
+        student: ResultSet = session.execute(f"SELECT * FROM student WHERE id = '{r.student_id}'")
+        resultado.append({ 
+            "student_id": r.student_id,
+            "student_name": student[0].name
+        })
 
-    for i, linha in enumerate(resultado):
-        resultado[i]["_id"] = str(linha["_id"])
+    with open('./resultados_cassandra/alunos-formados.json', 'w') as f:
+        json.dump({ "semester": 2, "year": 2018, "formados": resultado }, f, ensure_ascii=False)
 
-    with open('./resultados/alunos-formados.json', 'w') as f:
-        json.dump(resultado, f, ensure_ascii=False)
-
-# Retorna os professores que são chefes de departamento
 def chefes_departamento():
     print("Buscando os professores que são chefes de departamento")
+    session.set_keyspace("faculdade")
+    relacao_chefe: ResultSet = session.execute("SELECT * FROM department;")
 
-    pipeline = [
-        {"$lookup": {
-            "from": "professor",         
-            "localField": "boss_id",
-            "foreignField": "id", 
-            "as": "detalhes_professor"  
-        }},
-        {"$unwind": "$detalhes_professor"}, 
-        {"$project": {
-            "detalhes_professor": 1
-        }}
-    ]
+    resultado = []
 
-    resultado = list(banco_mongo["department"].aggregate(pipeline))
+    for r in relacao_chefe:
+        professor: ResultSet = session.execute(f"SELECT * FROM professor WHERE id = '{r.boss_id}'")
+        resultado.append({ 
+            "professor_id": r.boss_id,
+            "professor_name": professor[0].name,
+            "department": r.dept_name,
+            "budget": float(r.budget)
+        })
 
-    for i, linha in enumerate(resultado):
-        detalhes_professor = linha["detalhes_professor"]
-        resultado[i] = detalhes_professor
-        resultado[i]["_id"] = str(resultado[i]["_id"])
-
-    with open('./resultados/prof-chefes.json', 'w') as f:
+    with open('./resultados_cassandra/prof-chefes.json', 'w') as f:
         json.dump(resultado, f, ensure_ascii=False)
 
-# Retorna os alunos que formaram/formam um grupo específico de TCC, juntamente com o professor orientador
 def grupo_de_tcc():
-    print("Alunos participantes do grupo CC1234567")
+    print("Buscando os alunos que formaram o grupo de TCC de ID CC1234567")
+    session.set_keyspace("faculdade")
 
-    pipeline = [
-        {"$match": {"group_id": "EP1111111"}},
-        {"$lookup": {
-            "from": "tcc_group",
-            "localField": "group_id",
-            "foreignField": "id",
-            "as": "tcc_grupo"
-        }},
-        {"$unwind": "$tcc_grupo"},
-        {"$lookup": {
-            "from": "professor", 
-            "localField": "tcc_grupo.professor_id", 
-            "foreignField": "id",  
-            "as": "detalhes_professor"
-        }},
-        {"$unwind": {"path": "$detalhes_professor", "preserveNullAndEmptyArrays": True}},  # Não quebra se não houver correspondência
-        {"$project": {  
-            "id": 1,
-            "name": 1,
-            "course_id": 1,
-            "group_id": 1,
-            "nome_professor": "$detalhes_professor.name"
-        }}
-    ]
+    resultado = []
 
-    resultado = list(banco_mongo["student"].aggregate(pipeline))
+    student: ResultSet = session.execute(f"SELECT * FROM student WHERE group_id = 'CC1234567' ALLOW FILTERING;")
+    resultado.append({ 
+        "student_id": student[0].id,
+        "student_name": student[0].name
+    })
 
-    if not resultado:
-        print("Nenhum resultado encontrado para o grupo de TCC.")
-        return
-
-    registros = {
-        "group_id": resultado[0].get("group_id", "Desconhecido"),
-        "detalhes_professor": resultado[0].get("nome_professor", "Não informado"),
-        "alunos": []
-    }
-
-    for linha in resultado:
-        aluno = {
-            "id": linha.get("id"),
-            "name": linha.get("name"),
-            "course_id": linha.get("course_id"),
-        }
-        registros["alunos"].append(aluno)
-
-    # Salvar em arquivo JSON
-    os.makedirs('./resultados', exist_ok=True)
-    with open('./resultados/grupo-tcc.json', 'w') as f:
-        json.dump(registros, f, ensure_ascii=False)
-
-    print("Dados do grupo de TCC salvos em './resultados/grupo-tcc.json'.")
+    with open('./resultados_cassandra/grupo-tcc.json', 'w') as f:
+        json.dump(resultado, f, ensure_ascii=False)
