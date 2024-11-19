@@ -1,4 +1,4 @@
-# Banco de Dados SQL para DOCS
+# Banco de Dados SQL para NO SQL WIDECOLUMN STORAGE
 
 ## Integrantes:
 
