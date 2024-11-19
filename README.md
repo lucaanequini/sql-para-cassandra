@@ -20,7 +20,7 @@ Ative o ambiente virtual.
 - Instale as dependências:
 
   ```
-  pip install psycopg2 python-dotenv pymongo
+  pip install psycopg2 python-dotenv cassandra-driver
   ```
 
 Configure suas variaveis de ambiente em um arquivo `.env` na raiz do projeto:
